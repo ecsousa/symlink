@@ -1,0 +1,490 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+readonly ICON_OK="OK"
+readonly ICON_WARN="!!"
+readonly ICON_INFO="::"
+
+had_errors=0
+IFS=$'\n\t '
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+
+trim() {
+    local str="$1"
+    str="${str#"${str%%[!$' \t\r\n']*}"}"
+    str="${str%"${str##*[!$' \t\r\n']}"}"
+    printf '%s' "$str"
+}
+
+strip_inline_comment() {
+    local line="$1"
+    if [[ $line == *'#'* ]]; then
+        line="${line%%#*}"
+        line="$(trim "$line")"
+    fi
+    printf '%s' "$line"
+}
+
+normalize_separators() {
+    local value="$1"
+    value="${value//\\/\/}"
+    printf '%s' "$value"
+}
+
+normalize_components() {
+    local input
+    input="$(normalize_separators "$1")"
+    local absolute=0
+    [[ $input == /* ]] && absolute=1
+
+    local IFS='/'
+    read -r -a parts <<< "$input"
+    local -a stack=()
+    local part
+    for part in "${parts[@]}"; do
+        case $part in
+            ''|.)
+                continue
+                ;;
+            ..)
+                if (( ${#stack[@]} > 0 )) && [[ ${stack[${#stack[@]}-1]} != '..' ]]; then
+                    unset "stack[${#stack[@]}-1]"
+                else
+                    if (( absolute == 0 )); then
+                        stack+=("..")
+                    fi
+                fi
+                ;;
+            *)
+                stack+=("$part")
+                ;;
+        esac
+    done
+
+    local joined=""
+    if (( ${#stack[@]} > 0 )); then
+        joined=$(IFS='/'; printf '%s' "${stack[*]}")
+    fi
+
+    if (( absolute )); then
+        if [[ -n $joined ]]; then
+            printf '/%s' "$joined"
+        else
+            printf '/'
+        fi
+    else
+        printf '%s' "$joined"
+    fi
+}
+
+resolve_path() {
+    local base="$1"
+    local path="$2"
+    if [[ $path == /* ]]; then
+        normalize_components "$path"
+    else
+        normalize_components "$base/$path"
+    fi
+}
+
+expand_path() {
+    local input="$1"
+    local output=""
+    local len=${#input}
+    local i=0
+    while (( i < len )); do
+        local ch="${input:i:1}"
+        if [[ $ch == % ]]; then
+            if (( i > 0 )) && [[ ${input:i-1:1} == "\\" ]]; then
+                output+='%'
+                ((i++))
+                continue
+            fi
+            local j=$((i + 1))
+            while (( j < len )); do
+                local c="${input:j:1}"
+                case $c in
+                    [A-Za-z0-9_])
+                        ((j++))
+                        ;;
+                    *)
+                        break
+                        ;;
+                esac
+            done
+            if (( j < len )) && [[ ${input:j:1} == % ]] && (( j > i + 1 )); then
+                local name="${input:i+1:j-i-1}"
+                if [[ -n ${!name+x} ]]; then
+                    output+="${!name}"
+                    i=$((j + 1))
+                    continue
+                fi
+            fi
+            output+='%'
+            ((i++))
+        elif [[ $ch == '$' ]]; then
+            if (( i > 0 )) && [[ ${input:i-1:1} == "\\" ]]; then
+                output+='$'
+                ((i++))
+                continue
+            fi
+            if (( i + 1 < len )) && [[ ${input:i+1:1} == '{' ]]; then
+                local j=$((i + 2))
+                while (( j < len )); do
+                    local c="${input:j:1}"
+                    case $c in
+                        [A-Za-z0-9_])
+                            ((j++))
+                            ;;
+                        *)
+                            break
+                            ;;
+                    esac
+                done
+                if (( j < len )) && [[ ${input:j:1} == '}' ]] && (( j > i + 2 )); then
+                    local name="${input:i+2:j-i-2}"
+                    if [[ -n ${!name+x} ]]; then
+                        output+="${!name}"
+                        i=$((j + 1))
+                        continue
+                    fi
+                fi
+            elif (( i + 1 < len )); then
+                local next="${input:i+1:1}"
+                case $next in
+                    [A-Za-z_])
+                        local j=$((i + 1))
+                        while (( j < len )); do
+                            local c="${input:j:1}"
+                            case $c in
+                                [A-Za-z0-9_])
+                                    ((j++))
+                                    ;;
+                                *)
+                                    break
+                                    ;;
+                            esac
+                        done
+                        local name="${input:i+1:j-i-1}"
+                        if [[ -n ${!name+x} ]]; then
+                            output+="${!name}"
+                            i=$j
+                            continue
+                        fi
+                        ;;
+                esac
+            fi
+            output+='$'
+            ((i++))
+        else
+            output+="$ch"
+            ((i++))
+        fi
+    done
+
+    if [[ $output == '~' ]]; then
+        if [[ -n ${HOME:-} ]]; then
+            output=$HOME
+        fi
+    elif [[ $output == ~/* ]]; then
+        if [[ -n ${HOME:-} ]]; then
+            output=${HOME}${output:1}
+        fi
+    fi
+
+    printf '%s' "$output"
+}
+
+ensure_parent_dir() {
+    local path="$1"
+    local parent
+    parent="$(dirname -- "$path")" || return 1
+    if [[ $parent == . || $parent == "$path" ]]; then
+        return 0
+    fi
+    mkdir -p "$parent"
+}
+
+path_exists() {
+    [[ -e $1 || -L $1 ]]
+}
+
+is_symlink() {
+    [[ -L $1 ]]
+}
+
+get_symlink_target() {
+    local link="$1"
+    if ! is_symlink "$link"; then
+        return 1
+    fi
+    local stored
+    stored="$(readlink "$link")" || return 1
+    if [[ $stored == /* ]]; then
+        normalize_components "$stored"
+    else
+        local dir
+        dir="$(dirname -- "$link")"
+        normalize_components "$dir/$stored"
+    fi
+}
+
+log_message() {
+    local icon="$1"
+    local item="$2"
+    local message="$3"
+    printf '[%s %s] %s\n' "$icon" "$item" "$message"
+}
+
+usage() {
+    cat <<'EOF'
+Usage: configure [--mappings PATH]
+
+Reads mappings from mappings.txt and mappings.nix.txt (if present) and
+creates directories and symbolic links so target paths point at the
+local directories under the script directory.
+EOF
+}
+
+mappings_override=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --mappings)
+            if [[ $# -lt 2 ]]; then
+                echo "Missing value for --mappings" >&2
+                exit 1
+            fi
+            mappings_override="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            exit 1
+            ;;
+    esac
+done
+
+declare -a mapping_files=()
+if [[ -n $mappings_override ]]; then
+    path="$mappings_override"
+    if [[ $path != /* ]]; then
+        path="$script_dir/$path"
+    fi
+    if [[ ! -f $path ]]; then
+        echo "Mappings file not found at '$path'." >&2
+        exit 1
+    fi
+    mapping_files+=("$path")
+else
+    default="$script_dir/mappings.txt"
+    if [[ -f $default ]]; then
+        mapping_files+=("$default")
+    fi
+    nix="$script_dir/mappings.nix.txt"
+    if [[ -f $nix ]]; then
+        mapping_files+=("$nix")
+    fi
+    if (( ${#mapping_files[@]} == 0 )); then
+        echo "Mappings file not found. Expected 'mappings.txt' or 'mappings.nix.txt' alongside the script." >&2
+        exit 1
+    fi
+fi
+
+summary=""
+for file in "${mapping_files[@]}"; do
+    if [[ -n $summary ]]; then
+        summary+=", "
+    fi
+    summary+="'$file'"
+done
+printf 'Processing mappings from: %s\n' "$summary"
+
+for mapping_file in "${mapping_files[@]}"; do
+    line_number=0
+    while IFS= read -r raw_line || [[ -n $raw_line ]]; do
+        line_number=$((line_number + 1))
+        line_context="$(basename "$mapping_file"):$line_number"
+        trimmed="$(trim "$raw_line")"
+        [[ -z $trimmed ]] && continue
+        without_comment="$(strip_inline_comment "$trimmed")"
+        [[ -z $without_comment ]] && continue
+        if [[ $without_comment != *:* ]]; then
+            log_message "$ICON_WARN" "$line_context" "Invalid mapping format. Expected 'LOCAL_NAME: TARGET'."
+            had_errors=1
+            continue
+        fi
+
+        local_part="${without_comment%%:*}"
+        target_part="${without_comment#*:}"
+        local_name="$(trim "$local_part")"
+        target_raw="$(trim "$target_part")"
+
+        if [[ -z $local_name || -z $target_raw ]]; then
+            log_message "$ICON_WARN" "$line_context" "Invalid mapping format. Local name or target path is empty."
+            had_errors=1
+            continue
+        fi
+
+        if (( ${#target_raw} > 1 )) && { [[ ${target_raw:0:1} == '"' && ${target_raw: -1} == '"' ]] || [[ ${target_raw:0:1} == "'" && ${target_raw: -1} == "'" ]]; }; then
+            target_raw="${target_raw:1:${#target_raw}-2}"
+        fi
+
+        local_input="$(normalize_separators "$local_name")"
+        local_full="$(resolve_path "$script_dir" "$local_input")"
+        expanded_target="$(expand_path "$target_raw")"
+        target_input="$(normalize_separators "$expanded_target")"
+        target_full="$(resolve_path "$script_dir" "$target_input")"
+
+        local_exists=0
+        if path_exists "$local_full"; then
+            local_exists=1
+        fi
+
+        target_exists=0
+        if path_exists "$target_full"; then
+            target_exists=1
+        fi
+
+        target_is_symlink=0
+        if is_symlink "$target_full"; then
+            target_is_symlink=1
+        fi
+
+        target_points_to_local=0
+        if (( target_is_symlink == 1 && local_exists == 1 )); then
+            local_resolved="$(normalize_components "$local_full")"
+            link_target="$(get_symlink_target "$target_full")"
+            if [[ -n $link_target && $link_target == "$local_resolved" ]]; then
+                target_points_to_local=1
+            fi
+        fi
+
+        if (( local_exists == 1 )); then
+            if (( target_is_symlink == 1 )); then
+                if (( target_points_to_local == 1 )); then
+                    log_message "$ICON_INFO" "$local_name" "Link ok at $target_raw"
+                    continue
+                fi
+
+                if ! rm -f "$target_full"; then
+                    log_message "$ICON_WARN" "$local_name" "Failed to remove existing link '$target_full'."
+                    had_errors=1
+                    continue
+                fi
+
+                if ! ensure_parent_dir "$target_full"; then
+                    log_message "$ICON_WARN" "$local_name" "Failed to prepare parent directory for '$target_full'."
+                    had_errors=1
+                    continue
+                fi
+
+                if ln -s "$local_full" "$target_full"; then
+                    log_message "$ICON_INFO" "$local_name" "Updated link at $target_raw"
+                else
+                    log_message "$ICON_WARN" "$local_name" "Failed to create symbolic link '$target_full'."
+                    had_errors=1
+                fi
+
+                continue
+            fi
+
+            if (( target_exists == 0 )); then
+                if ! ensure_parent_dir "$target_full"; then
+                    log_message "$ICON_WARN" "$local_name" "Failed to prepare parent directory for '$target_full'."
+                    had_errors=1
+                    continue
+                fi
+
+                if ln -s "$local_full" "$target_full"; then
+                    log_message "$ICON_OK" "$local_name" "Created link at $target_raw"
+                else
+                    log_message "$ICON_WARN" "$local_name" "Failed to create symbolic link '$target_full'."
+                    had_errors=1
+                fi
+
+                continue
+            fi
+
+            log_message "$ICON_WARN" "$local_name" "Both local and target exist but target is not a symbolic link. Skipped."
+            had_errors=1
+            continue
+        fi
+
+        if (( target_exists == 1 )); then
+            if (( target_is_symlink == 1 )); then
+                log_message "$ICON_WARN" "$local_name" "Target '$target_raw' is a symbolic link but local path '$local_full' is missing. Skipped."
+                had_errors=1
+                continue
+            fi
+
+            if ! ensure_parent_dir "$local_full"; then
+                log_message "$ICON_WARN" "$local_name" "Failed to prepare parent directory for '$local_full'."
+                had_errors=1
+                continue
+            fi
+
+            if mv "$target_full" "$local_full"; then
+                log_message "$ICON_INFO" "$local_name" "Moved $target_raw to local path"
+            else
+                log_message "$ICON_WARN" "$local_name" "Failed to move '$target_full' to '$local_full'."
+                had_errors=1
+                continue
+            fi
+
+            if ! ensure_parent_dir "$target_full"; then
+                log_message "$ICON_WARN" "$local_name" "Failed to prepare parent directory for '$target_full'."
+                had_errors=1
+                continue
+            fi
+
+            if ln -s "$local_full" "$target_full"; then
+                log_message "$ICON_OK" "$local_name" "Created link at $target_raw"
+            else
+                log_message "$ICON_WARN" "$local_name" "Failed to create symbolic link '$target_full'."
+                had_errors=1
+            fi
+
+            continue
+        fi
+
+        if ! ensure_parent_dir "$local_full"; then
+            log_message "$ICON_WARN" "$local_name" "Failed to prepare parent directory for '$local_full'."
+            had_errors=1
+            continue
+        fi
+
+        if [[ ! -d "$local_full" ]]; then
+            if mkdir -p "$local_full"; then
+                log_message "$ICON_INFO" "$local_name" "Created local directory"
+            else
+                log_message "$ICON_WARN" "$local_name" "Failed to create directory '$local_full'."
+                had_errors=1
+                continue
+            fi
+        fi
+
+        if ! ensure_parent_dir "$target_full"; then
+            log_message "$ICON_WARN" "$local_name" "Failed to prepare parent directory for '$target_full'."
+            had_errors=1
+            continue
+        fi
+
+        if ln -s "$local_full" "$target_full"; then
+            log_message "$ICON_OK" "$local_name" "Created link at $target_raw"
+        else
+            log_message "$ICON_WARN" "$local_name" "Failed to create symbolic link '$target_full'."
+            had_errors=1
+        fi
+    done < "$mapping_file"
+done
+
+if (( had_errors )); then
+    exit 1
+fi
+
+exit 0

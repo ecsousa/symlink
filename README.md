@@ -1,34 +1,38 @@
-# configure.ps1
+# Configure Scripts
 
-PowerShell script that keeps a set of local directories in sync with symbolic links defined in `mappings.txt`.
+Companion scripts keep a set of local directories in sync with symbolic links defined in mapping files that live beside the scripts.
 
-## Requirements
+## Shared Mapping Rules
 
-- Windows with Developer Mode enabled so directory symbolic links can be created without elevation.
-- PowerShell 7+ (Windows PowerShell also works).
+- Define mappings in `LOCAL_NAME: TARGET` format. `LOCAL_NAME` is treated as a path relative to the script directory.
+- `mappings.txt` is always read when present. Platform-specific additions are loaded from `mappings.win.txt` on Windows and `mappings.nix.txt` on Linux/macOS. Entries are processed in the order they appear across files.
+- Blank lines and trailing comments (`# comment`) are ignored.
+- Quotes around the target path are stripped.
+- Environment variables are expanded in both Windows (`%VAR%`) and Unix (`$VAR` / `${VAR}`) styles. On Windows, `$HOME` falls back to the user profile directory.
 
-## Usage
+## Windows (`configure.ps1`)
 
-1. Place `configure.ps1` and a `mappings.txt` file in the same directory.
-2. Populate `mappings.txt` with one mapping per line using the format `LOCAL_NAME: TARGET`.
-3. Run the script from that directory:
-   ```powershell
-   pwsh ./configure.ps1
-   ```
+- Requires Windows with Developer Mode enabled to create directory symbolic links without elevation.
+- Works with PowerShell 7+ (Windows PowerShell also supported).
+- Forward slashes in mapping paths are accepted and normalised.
+- Run from the script directory:
+  ```powershell
+  pwsh ./configure.ps1
+  ```
+- Use `-MappingsPath` to supply an explicit mapping file instead of the default set.
 
-Optional: pass a custom mapping file with `-MappingsPath`.
+## Linux/macOS (`configure`)
 
-## Mapping File Rules
-
-- Lines that are empty or only whitespace are ignored.
-- Inline comments starting with `#` are stripped before parsing (e.g. `Test3: %USERPROFILE%\Foo # note`).
-- `LOCAL_NAME` is always resolved relative to the script directory.
-- `TARGET` can include environment variables in the Windows style (`%VAR%`) which are expanded before resolution (relative paths remain script-relative).
-- Quotes around `TARGET` are removed if present.
+- Requires Bash 3.2+ (or newer) and standard Unix utilities (`mkdir`, `ln`, `mv`, `readlink`).
+- Run from the script directory:
+  ```bash
+  ./configure
+  ```
+- Pass `--mappings PATH` to process a single, custom mapping file.
 
 ## Processing Logic
 
-For each mapping the script:
+For each mapping the scripts perform the same steps:
 
 - **Target already correct**: If `LOCAL_NAME` exists and `TARGET` is a symbolic link pointing at it, nothing changes.
 - **Relink**: If `LOCAL_NAME` exists and `TARGET` is a symbolic link to a different location, the link is recreated to point at `LOCAL_NAME`.
@@ -40,4 +44,4 @@ For each mapping the script:
   - `LOCAL_NAME` is missing while `TARGET` is a symbolic link.
   - Formatting errors or paths that cannot be resolved.
 
-The script logs each action and reports warnings when it cannot satisfy a mapping. Any warning triggers a non-zero exit code so automation can detect problems.
+Each action is logged and any warning causes a non-zero exit code so automation can detect problems.
