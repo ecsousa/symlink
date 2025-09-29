@@ -195,14 +195,14 @@ foreach ($mappingFile in $mappingFiles) {
             continue
         }
         if ($lineWithoutComment -notmatch '^(?<local>[^:]+):(?<target>.+)$') {
-            Write-Message "??" $lineContext "Invalid mapping format. Expected 'LOCAL_NAME: TARGET'."
+            Write-Message "⚠️" $lineContext "Invalid mapping format. Expected 'LOCAL_NAME: TARGET'."
             $hadErrors = $true
             continue
         }
         $localName = $matches['local'].Trim()
         $targetRaw = $matches['target'].Trim()
         if ([string]::IsNullOrWhiteSpace($localName) -or [string]::IsNullOrWhiteSpace($targetRaw)) {
-            Write-Message "??" $lineContext "Invalid mapping format. Local name or target path is empty."
+            Write-Message "⚠️" $lineContext "Invalid mapping format. Local name or target path is empty."
             $hadErrors = $true
             continue
         }
@@ -213,7 +213,7 @@ foreach ($mappingFile in $mappingFiles) {
         try {
             $localFullPath = Get-FullPathRelativeToScript -Path $normalizedLocalInput
         } catch {
-            Write-Message "??" $lineContext "Unable to resolve local path '$localName': $($_.Exception.Message)"
+            Write-Message "⚠️" $lineContext "Unable to resolve local path '$localName': $($_.Exception.Message)"
             $hadErrors = $true
             continue
         }
@@ -222,7 +222,7 @@ foreach ($mappingFile in $mappingFiles) {
         try {
             $targetFullPath = Get-FullPathRelativeToScript -Path $normalizedTargetInput
         } catch {
-            Write-Message "??" $lineContext "Unable to resolve target path '$targetRaw': $($_.Exception.Message)"
+            Write-Message "⚠️" $lineContext "Unable to resolve target path '$targetRaw': $($_.Exception.Message)"
             $hadErrors = $true
             continue
         }
@@ -235,7 +235,7 @@ foreach ($mappingFile in $mappingFiles) {
                 $targetItem = Get-Item -LiteralPath $targetFullPath -Force
                 $targetIsSymlink = Is-SymbolicLink -Item $targetItem
             } catch {
-                Write-Message "??" $lineContext "Unable to get info for target '$targetFullPath': $($_.Exception.Message)"
+                Write-Message "⚠️" $lineContext "Unable to get info for target '$targetFullPath': $($_.Exception.Message)"
                 $hadErrors = $true
                 continue
             }
@@ -256,22 +256,22 @@ foreach ($mappingFile in $mappingFiles) {
         if ($localExists) {
             if ($targetIsSymlink) {
                 if ($targetPointsToLocal) {
-                    Write-Message "?" $localName "Link ok at $targetRaw"
+                    Write-Message "✅" $localName "Link ok at $targetRaw"
                     continue
                 }
                 try {
                     Remove-Item -LiteralPath $targetFullPath -Force
                 } catch {
-                    Write-Message "?" $localName "Failed to remove existing link '$targetFullPath': $($_.Exception.Message)"
+                    Write-Message "❌" $localName "Failed to remove existing link '$targetFullPath': $($_.Exception.Message)"
                     $hadErrors = $true
                     continue
                 }
                 try {
                     Ensure-ParentDirectory -Path $targetFullPath
                     New-Item -Path $targetFullPath -ItemType SymbolicLink -Target $localFullPath | Out-Null
-                    Write-Message "??" $localName "Updated link at $targetRaw"
+                    Write-Message "🔁" $localName "Updated link at $targetRaw"
                 } catch {
-                    Write-Message "?" $localName "Failed to create symbolic link '$targetFullPath': $($_.Exception.Message)"
+                    Write-Message "❌" $localName "Failed to create symbolic link '$targetFullPath': $($_.Exception.Message)"
                     $hadErrors = $true
                 }
                 continue
@@ -280,38 +280,38 @@ foreach ($mappingFile in $mappingFiles) {
                 try {
                     Ensure-ParentDirectory -Path $targetFullPath
                     New-Item -Path $targetFullPath -ItemType SymbolicLink -Target $localFullPath | Out-Null
-                    Write-Message "?" $localName "Created link at $targetRaw"
+                    Write-Message "➕" $localName "Created link at $targetRaw"
                 } catch {
-                    Write-Message "?" $localName "Failed to create symbolic link '$targetFullPath': $($_.Exception.Message)"
+                    Write-Message "❌" $localName "Failed to create symbolic link '$targetFullPath': $($_.Exception.Message)"
                     $hadErrors = $true
                 }
                 continue
             }
-            Write-Message "??" $localName "Both local and target exist but target is not a symbolic link. Skipped."
+            Write-Message "⚠️" $localName "Both local and target exist but target is not a symbolic link. Skipped."
             $hadErrors = $true
             continue
         }
         if ($targetExists) {
             if ($targetIsSymlink) {
-                Write-Message "??" $localName "Target '$targetRaw' is a symbolic link but local path '$localFullPath' is missing. Skipped."
+                Write-Message "⚠️" $localName "Target '$targetRaw' is a symbolic link but local path '$localFullPath' is missing. Skipped."
                 $hadErrors = $true
                 continue
             }
             try {
                 Ensure-ParentDirectory -Path $localFullPath
                 Move-Item -LiteralPath $targetFullPath -Destination $localFullPath
-                Write-Message "??" $localName "Moved $targetRaw to local path"
+                Write-Message "📦" $localName "Moved $targetRaw to local path"
             } catch {
-                Write-Message "?" $localName "Failed to move '$targetFullPath' to '$localFullPath': $($_.Exception.Message)"
+                Write-Message "❌" $localName "Failed to move '$targetFullPath' to '$localFullPath': $($_.Exception.Message)"
                 $hadErrors = $true
                 continue
             }
             try {
                 Ensure-ParentDirectory -Path $targetFullPath
                 New-Item -Path $targetFullPath -ItemType SymbolicLink -Target $localFullPath | Out-Null
-                Write-Message "?" $localName "Created link at $targetRaw"
+                Write-Message "➕" $localName "Created link at $targetRaw"
             } catch {
-                Write-Message "?" $localName "Failed to create symbolic link '$targetFullPath': $($_.Exception.Message)"
+                Write-Message "❌" $localName "Failed to create symbolic link '$targetFullPath': $($_.Exception.Message)"
                 $hadErrors = $true
             }
             continue
@@ -320,19 +320,19 @@ foreach ($mappingFile in $mappingFiles) {
             Ensure-ParentDirectory -Path $localFullPath
             if (-not (Test-Path -LiteralPath $localFullPath -PathType Container)) {
                 New-Item -ItemType Directory -Path $localFullPath -Force | Out-Null
-                Write-Message "??" $localName "Created local directory"
+                Write-Message "➕" $localName "Created local directory"
             }
         } catch {
-            Write-Message "?" $localName "Failed to create directory '$localFullPath': $($_.Exception.Message)"
+            Write-Message "❌" $localName "Failed to create directory '$localFullPath': $($_.Exception.Message)"
             $hadErrors = $true
             continue
         }
         try {
             Ensure-ParentDirectory -Path $targetFullPath
             New-Item -Path $targetFullPath -ItemType SymbolicLink -Target $localFullPath | Out-Null
-            Write-Message "?" $localName "Created link at $targetRaw"
+            Write-Message "➕" $localName "Created link at $targetRaw"
         } catch {
-            Write-Message "?" $localName "Failed to create symbolic link '$targetFullPath': $($_.Exception.Message)"
+            Write-Message "❌" $localName "Failed to create symbolic link '$targetFullPath': $($_.Exception.Message)"
             $hadErrors = $true
         }
     }

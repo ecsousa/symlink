@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-readonly ICON_OK="OK"
-readonly ICON_WARN="!!"
-readonly ICON_INFO="::"
-
 had_errors=0
 IFS=$'\n\t '
 
@@ -314,7 +310,7 @@ for mapping_file in "${mapping_files[@]}"; do
         without_comment="$(strip_inline_comment "$trimmed")"
         [[ -z $without_comment ]] && continue
         if [[ $without_comment != *:* ]]; then
-            log_message "$ICON_WARN" "$line_context" "Invalid mapping format. Expected 'LOCAL_NAME: TARGET'."
+            log_message "⚠️" "$line_context" "Invalid mapping format. Expected 'LOCAL_NAME: TARGET'."
             had_errors=1
             continue
         fi
@@ -325,7 +321,7 @@ for mapping_file in "${mapping_files[@]}"; do
         target_raw="$(trim "$target_part")"
 
         if [[ -z $local_name || -z $target_raw ]]; then
-            log_message "$ICON_WARN" "$line_context" "Invalid mapping format. Local name or target path is empty."
+            log_message "⚠️" "$line_context" "Invalid mapping format. Local name or target path is empty."
             had_errors=1
             continue
         fi
@@ -367,26 +363,26 @@ for mapping_file in "${mapping_files[@]}"; do
         if (( local_exists == 1 )); then
             if (( target_is_symlink == 1 )); then
                 if (( target_points_to_local == 1 )); then
-                    log_message "$ICON_INFO" "$local_name" "Link ok at $target_raw"
+                    log_message "✅" "$local_name" "Link ok at $target_raw"
                     continue
                 fi
 
                 if ! rm -f "$target_full"; then
-                    log_message "$ICON_WARN" "$local_name" "Failed to remove existing link '$target_full'."
+                    log_message "❌" "$local_name" "Failed to remove existing link '$target_full'."
                     had_errors=1
                     continue
                 fi
 
                 if ! ensure_parent_dir "$target_full"; then
-                    log_message "$ICON_WARN" "$local_name" "Failed to prepare parent directory for '$target_full'."
+                    log_message "❌" "$local_name" "Failed to prepare parent directory for '$target_full'."
                     had_errors=1
                     continue
                 fi
 
                 if ln -s "$local_full" "$target_full"; then
-                    log_message "$ICON_INFO" "$local_name" "Updated link at $target_raw"
+                    log_message "🔁" "$local_name" "Updated link at $target_raw"
                 else
-                    log_message "$ICON_WARN" "$local_name" "Failed to create symbolic link '$target_full'."
+                    log_message "❌" "$local_name" "Failed to create symbolic link '$target_full'."
                     had_errors=1
                 fi
 
@@ -395,57 +391,57 @@ for mapping_file in "${mapping_files[@]}"; do
 
             if (( target_exists == 0 )); then
                 if ! ensure_parent_dir "$target_full"; then
-                    log_message "$ICON_WARN" "$local_name" "Failed to prepare parent directory for '$target_full'."
+                    log_message "❌" "$local_name" "Failed to prepare parent directory for '$target_full'."
                     had_errors=1
                     continue
                 fi
 
                 if ln -s "$local_full" "$target_full"; then
-                    log_message "$ICON_OK" "$local_name" "Created link at $target_raw"
+                    log_message "➕" "$local_name" "Created link at $target_raw"
                 else
-                    log_message "$ICON_WARN" "$local_name" "Failed to create symbolic link '$target_full'."
+                    log_message "❌" "$local_name" "Failed to create symbolic link '$target_full'."
                     had_errors=1
                 fi
 
                 continue
             fi
 
-            log_message "$ICON_WARN" "$local_name" "Both local and target exist but target is not a symbolic link. Skipped."
+            log_message "⚠️" "$local_name" "Both local and target exist but target is not a symbolic link. Skipped."
             had_errors=1
             continue
         fi
 
         if (( target_exists == 1 )); then
             if (( target_is_symlink == 1 )); then
-                log_message "$ICON_WARN" "$local_name" "Target '$target_raw' is a symbolic link but local path '$local_full' is missing. Skipped."
+                log_message "⚠️" "$local_name" "Target '$target_raw' is a symbolic link but local path '$local_full' is missing. Skipped."
                 had_errors=1
                 continue
             fi
 
             if ! ensure_parent_dir "$local_full"; then
-                log_message "$ICON_WARN" "$local_name" "Failed to prepare parent directory for '$local_full'."
+                log_message "❌" "$local_name" "Failed to prepare parent directory for '$local_full'."
                 had_errors=1
                 continue
             fi
 
             if mv "$target_full" "$local_full"; then
-                log_message "$ICON_INFO" "$local_name" "Moved $target_raw to local path"
+                log_message "📦" "$local_name" "Moved $target_raw to local path"
             else
-                log_message "$ICON_WARN" "$local_name" "Failed to move '$target_full' to '$local_full'."
+                log_message "❌" "$local_name" "Failed to move '$target_full' to '$local_full'."
                 had_errors=1
                 continue
             fi
 
             if ! ensure_parent_dir "$target_full"; then
-                log_message "$ICON_WARN" "$local_name" "Failed to prepare parent directory for '$target_full'."
+                log_message "❌" "$local_name" "Failed to prepare parent directory for '$target_full'."
                 had_errors=1
                 continue
             fi
 
             if ln -s "$local_full" "$target_full"; then
-                log_message "$ICON_OK" "$local_name" "Created link at $target_raw"
+                log_message "➕" "$local_name" "Created link at $target_raw"
             else
-                log_message "$ICON_WARN" "$local_name" "Failed to create symbolic link '$target_full'."
+                log_message "❌" "$local_name" "Failed to create symbolic link '$target_full'."
                 had_errors=1
             fi
 
@@ -453,31 +449,31 @@ for mapping_file in "${mapping_files[@]}"; do
         fi
 
         if ! ensure_parent_dir "$local_full"; then
-            log_message "$ICON_WARN" "$local_name" "Failed to prepare parent directory for '$local_full'."
+            log_message "❌" "$local_name" "Failed to prepare parent directory for '$local_full'."
             had_errors=1
             continue
         fi
 
         if [[ ! -d "$local_full" ]]; then
             if mkdir -p "$local_full"; then
-                log_message "$ICON_INFO" "$local_name" "Created local directory"
+                log_message "📁" "$local_name" "Created local directory"
             else
-                log_message "$ICON_WARN" "$local_name" "Failed to create directory '$local_full'."
+                log_message "❌" "$local_name" "Failed to create directory '$local_full'."
                 had_errors=1
                 continue
             fi
         fi
 
         if ! ensure_parent_dir "$target_full"; then
-            log_message "$ICON_WARN" "$local_name" "Failed to prepare parent directory for '$target_full'."
+            log_message "❌" "$local_name" "Failed to prepare parent directory for '$target_full'."
             had_errors=1
             continue
         fi
 
         if ln -s "$local_full" "$target_full"; then
-            log_message "$ICON_OK" "$local_name" "Created link at $target_raw"
+            log_message "➕" "$local_name" "Created link at $target_raw"
         else
-            log_message "$ICON_WARN" "$local_name" "Failed to create symbolic link '$target_full'."
+            log_message "❌" "$local_name" "Failed to create symbolic link '$target_full'."
             had_errors=1
         fi
     done < "$mapping_file"
