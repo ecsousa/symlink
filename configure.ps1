@@ -85,6 +85,23 @@ function Get-FullPathRelativeToScript {
 
 Write-Host "Processing mappings from '$MappingsPath'." -ForegroundColor Cyan
 
+function Write-Message {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Emoji,
+        [Parameter(Mandatory = $true)]
+        [string]$Item,
+        [Parameter(Mandatory = $true)]
+        [string]$Message
+    )
+
+    Write-Host "[$Emoji " -NoNewline -ForegroundColor Yellow
+    Write-Host $Item -NoNewline -ForegroundColor Blue
+    Write-Host "] " -ForegroundColor Yellow -NoNewline
+    Write-Host $Message
+}
+
+
 $lineNumber = 0
 foreach ($rawLine in Get-Content -LiteralPath $MappingsPath) {
     $lineNumber++
@@ -105,7 +122,7 @@ foreach ($rawLine in Get-Content -LiteralPath $MappingsPath) {
     }
 
     if ($lineWithoutComment -notmatch '^(?<local>[^:]+):(?<target>.+)$') {
-        Write-Warning "[Line $lineNumber] Invalid mapping format. Expected 'LOCAL_NAME: TARGET'."
+        Write-Message "⚠️" "Line $lineNumber" "Invalid mapping format. Expected 'LOCAL_NAME: TARGET'."
         $hadErrors = $true
         continue
     }
@@ -114,7 +131,7 @@ foreach ($rawLine in Get-Content -LiteralPath $MappingsPath) {
     $targetRaw = $matches['target'].Trim()
 
     if ([string]::IsNullOrWhiteSpace($localName) -or [string]::IsNullOrWhiteSpace($targetRaw)) {
-        Write-Warning "[Line $lineNumber] Mapping must contain both local name and target path."
+        Write-Message "⚠️" "Line $lineNumber" "Invalid mapping format. Local name or target path is empty."
         $hadErrors = $true
         continue
     }
@@ -126,7 +143,7 @@ foreach ($rawLine in Get-Content -LiteralPath $MappingsPath) {
     try {
         $localFullPath = Get-FullPathRelativeToScript -Path $localName
     } catch {
-        Write-Warning "[Line $lineNumber] Unable to resolve local path '$localName': $($_.Exception.Message)"
+        Write-Message "⚠️" "Line $lineNumber" "Unable to resolve local path '$localName': $($_.Exception.Message)"
         $hadErrors = $true
         continue
     }
@@ -136,7 +153,7 @@ foreach ($rawLine in Get-Content -LiteralPath $MappingsPath) {
     try {
         $targetFullPath = Get-FullPathRelativeToScript -Path $expandedTarget
     } catch {
-        Write-Warning "[Line $lineNumber] Unable to resolve target path '$targetRaw': $($_.Exception.Message)"
+        Write-Message "⚠️" "Line $lineNumber" "Unable to resolve target path '$targetRaw': $($_.Exception.Message)"
         $hadErrors = $true
         continue
     }
@@ -151,7 +168,7 @@ foreach ($rawLine in Get-Content -LiteralPath $MappingsPath) {
             $targetItem = Get-Item -LiteralPath $targetFullPath -Force
             $targetIsSymlink = Is-SymbolicLink -Item $targetItem
         } catch {
-            Write-Warning "[Line $lineNumber] Unable to inspect target '$targetFullPath': $($_.Exception.Message)"
+            Write-Message "⚠️" "Line $lineNumber" "Unable to get info for target '$targetFullPath': $($_.Exception.Message)"
             $hadErrors = $true
             continue
         }
@@ -175,14 +192,14 @@ foreach ($rawLine in Get-Content -LiteralPath $MappingsPath) {
     if ($localExists) {
         if ($targetIsSymlink) {
             if ($targetPointsToLocal) {
-                Write-Host "[Line $lineNumber] Target '$targetFullPath' already links to '$localFullPath'."
+                Write-Message "✅" $localName "Link ok at $targetRaw"
                 continue
             }
 
             try {
                 Remove-Item -LiteralPath $targetFullPath -Force
             } catch {
-                Write-Warning "[Line $lineNumber] Failed to remove existing link '$targetFullPath': $($_.Exception.Message)"
+                Write-Message "❌" $localName "Failed to remove existing link '$targetFullPath': $($_.Exception.Message)"
                 $hadErrors = $true
                 continue
             }
@@ -190,9 +207,9 @@ foreach ($rawLine in Get-Content -LiteralPath $MappingsPath) {
             try {
                 Ensure-ParentDirectory -Path $targetFullPath
                 New-Item -Path $targetFullPath -ItemType SymbolicLink -Target $localFullPath | Out-Null
-                Write-Host "[Line $lineNumber] Updated symbolic link '$targetFullPath' -> '$localFullPath'."
+                Write-Message "🔁" $localName "Updated link at $targetRaw"
             } catch {
-                Write-Warning "[Line $lineNumber] Failed to create symbolic link '$targetFullPath': $($_.Exception.Message)"
+                Write-Message "❌" $localName "Failed to create symbolic link '$targetFullPath': $($_.Exception.Message)"
                 $hadErrors = $true
             }
 
@@ -203,23 +220,23 @@ foreach ($rawLine in Get-Content -LiteralPath $MappingsPath) {
             try {
                 Ensure-ParentDirectory -Path $targetFullPath
                 New-Item -Path $targetFullPath -ItemType SymbolicLink -Target $localFullPath | Out-Null
-                Write-Host "[Line $lineNumber] Created symbolic link '$targetFullPath' -> '$localFullPath'."
+                Write-Message "➕" $localName "Created link at $targetRaw"
             } catch {
-                Write-Warning "[Line $lineNumber] Failed to create symbolic link '$targetFullPath': $($_.Exception.Message)"
+                Write-Message "❌" $localName "Failed to create symbolic link '$targetFullPath': $($_.Exception.Message)"
                 $hadErrors = $true
             }
 
             continue
         }
 
-        Write-Warning "[Line $lineNumber] Both local '$localFullPath' and target '$targetFullPath' exist but target is not a symbolic link. Skipped."
+        Write-Message "⚠️" $localName "Both local and target exist but target is not a symbolic link. Skipped."
         $hadErrors = $true
         continue
     }
 
     if ($targetExists) {
         if ($targetIsSymlink) {
-            Write-Warning "[Line $lineNumber] Local path '$localFullPath' is missing while target '$targetFullPath' is a symbolic link. Skipped."
+            Write-Message "⚠️" $localName "Target '$targetRaw' is a symbolic link but local path '$localFullPath' is missing. Skipped."
             $hadErrors = $true
             continue
         }
@@ -227,9 +244,9 @@ foreach ($rawLine in Get-Content -LiteralPath $MappingsPath) {
         try {
             Ensure-ParentDirectory -Path $localFullPath
             Move-Item -LiteralPath $targetFullPath -Destination $localFullPath
-            Write-Host "[Line $lineNumber] Moved '$targetFullPath' to '$localFullPath'."
+            Write-Message "📦" $localName "Moved $targetRaw to local path"
         } catch {
-            Write-Warning "[Line $lineNumber] Failed to move '$targetFullPath' to '$localFullPath': $($_.Exception.Message)"
+            Write-Message "❌" $localName "Failed to move '$targetFullPath' to '$localFullPath': $($_.Exception.Message)"
             $hadErrors = $true
             continue
         }
@@ -237,9 +254,9 @@ foreach ($rawLine in Get-Content -LiteralPath $MappingsPath) {
         try {
             Ensure-ParentDirectory -Path $targetFullPath
             New-Item -Path $targetFullPath -ItemType SymbolicLink -Target $localFullPath | Out-Null
-            Write-Host "[Line $lineNumber] Created symbolic link '$targetFullPath' -> '$localFullPath'."
+            Write-Message "➕" $localName "Created link at $targetRaw"
         } catch {
-            Write-Warning "[Line $lineNumber] Failed to create symbolic link '$targetFullPath': $($_.Exception.Message)"
+            Write-Message "❌" $localName "Failed to create symbolic link '$targetFullPath': $($_.Exception.Message)"
             $hadErrors = $true
         }
 
@@ -250,10 +267,10 @@ foreach ($rawLine in Get-Content -LiteralPath $MappingsPath) {
         Ensure-ParentDirectory -Path $localFullPath
         if (-not (Test-Path -LiteralPath $localFullPath -PathType Container)) {
             New-Item -ItemType Directory -Path $localFullPath -Force | Out-Null
-            Write-Host "[Line $lineNumber] Created directory '$localFullPath'."
+            Write-Message "📁" $localName "Created local directory"
         }
     } catch {
-        Write-Warning "[Line $lineNumber] Failed to create directory '$localFullPath': $($_.Exception.Message)"
+        Write-Message "❌" $localName "Failed to create directory '$localFullPath': $($_.Exception.Message)"
         $hadErrors = $true
         continue
     }
@@ -261,9 +278,9 @@ foreach ($rawLine in Get-Content -LiteralPath $MappingsPath) {
     try {
         Ensure-ParentDirectory -Path $targetFullPath
         New-Item -Path $targetFullPath -ItemType SymbolicLink -Target $localFullPath | Out-Null
-        Write-Host "[Line $lineNumber] Created symbolic link '$targetFullPath' -> '$localFullPath'."
+        Write-Message "➕" $localName "Created link at $targetRaw"
     } catch {
-        Write-Warning "[Line $lineNumber] Failed to create symbolic link '$targetFullPath': $($_.Exception.Message)"
+        Write-Message "❌" $localName "Failed to create symbolic link '$targetFullPath': $($_.Exception.Message)"
         $hadErrors = $true
     }
 }
